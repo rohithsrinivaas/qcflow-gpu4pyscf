@@ -1,0 +1,16 @@
+# config.yaml
+workflow_tags:
+  group: "LiPC-superoxide"
+
+gpu:
+  n_gpus: 2
+
+input_params_step1:
+  xc: wb97mv
+  basis: def2-svpd
+  smd_solvent: "EC:EMC"
+
+input_params_step4:
+  xc: wb97mv
+  basis: def2-svpd
+  smd_solvent: "EC:EMC"
