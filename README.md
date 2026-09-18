@@ -19,7 +19,7 @@ multiprocessing loops across the local GPUs -- no job queue, no database.
 # The general approach using the qcflow
 
 * Create a directory containing the initial molecules in `init_mols`
-* Run `python 1-optimize-SP.py` -- this runs directly across the GPUs configured in
+* Run `python 1-optimize-init.py` -- this runs directly across the GPUs configured in
   `config.yaml` (`gpu.n_gpus`), writing one result JSON per molecule to
   `outputs/init_optimized/`. Rerunning is safe: molecules that already have a
   result file are skipped.
