@@ -11,6 +11,7 @@ unit bugs there: PySCF energies/gradients/Hessians are in Hartree / Hartree-per-
 import logging
 import os
 
+import numpy as np
 import pyscf
 from ase import units as ase_units
 from ase.calculators.calculator import Calculator, all_changes
@@ -78,6 +79,13 @@ class GPU4PySCFCalculator(Calculator):
     """ASE Calculator that (re)builds a GPU4PySCF mean-field object at each
     geometry Sella asks for, converting PySCF's Hartree / Hartree-per-Bohr
     units to ASE's eV / eV-per-Angstrom.
+
+    With `reuse_dm=True` (default) each SCF starts from the converged density
+    of the previous geometry, projected onto the AO basis at the new geometry
+    (the same scheme PySCF uses for `init_guess_by_chkfile`), instead of the
+    default atomic-density guess. The converged `mf` for the most recent
+    geometry is kept on `self.mf` so that other SCF consumers at the same
+    geometry (Sella's analytic Hessian, the final single point) can reuse it.
     """
 
     implemented_properties = ["energy", "forces"]
@@ -91,31 +99,54 @@ class GPU4PySCFCalculator(Calculator):
         self.reuse_dm = reuse_dm
         self.mf = None
 
+    def initial_guess(self, mol):
+        """Converged density of the previous SCF projected onto `mol`'s AO
+        basis (NumPy array, suitable for `mf.kernel(dm0=...)`), or None if
+        reuse is disabled / nothing converged yet / projection failed."""
+        if not self.reuse_dm or self.mf is None or not self.mf.converged:
+            return None
+        try:
+            from pyscf.scf import addons as scf_addons
+            dm_prev = self.mf.make_rdm1()
+            if hasattr(dm_prev, "get"):   # CuPy -> NumPy for the CPU projection
+                dm_prev = dm_prev.get()
+            dm_prev = np.asarray(dm_prev)
+            return scf_addons.project_dm_nr2nr(self.mf.mol, dm_prev, mol)
+        except Exception:
+            logger.warning("Could not project the previous density matrix onto "
+                           "the new geometry; using the default SCF guess",
+                           exc_info=True)
+            return None
+
+    def converged_mf(self, atoms):
+        """The converged mean-field object if it belongs to exactly this
+        geometry (positions, numbers, cell, pbc unchanged), else None."""
+        if self.mf is None or self.atoms is None or not self.mf.converged:
+            return None
+        if self.check_state(atoms):   # non-empty list of system_changes
+            return None
+        return self.mf
+
+    def run_scf(self, mol):
+        """Build a mean-field object for `mol`, converge it starting from the
+        previous density (if available) and make it the current `self.mf`."""
+        mf = self.mf_builder(mol)
+        dm0 = self.initial_guess(mol)
+        self.mf = mf
+        mf.kernel(dm0=dm0)
+        if not mf.converged:
+            raise RuntimeError("SCF did not converge")
+        return mf
+
     def calculate(self, atoms=None, properties=("energy", "forces"),
                   system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
         mol = build_mol(ase_to_pyscf_atom_string(atoms), self.basis,
                          self.charge, self.spin)
-        mf = self.mf_builder(mol)
+        mf = self.run_scf(mol)
 
-        dm0 = None
-        if self.reuse_dm and self.mf is not None:
-            try:
-                from pyscf.scf import addons as scf_addons
-                dm_prev = self.mf.make_rdm1()
-                if hasattr(dm_prev, "get"):   # CuPy → NumPy for the CPU projection
-                    dm_prev = dm_prev.get()
-                dm0 = scf_addons.project_dm_nr2nr(self.mf.mol, dm_prev, mol)
-            except Exception:
-                dm0 = None  # fall back to default atomic-density guess
-
-        self.mf = mf
-        energy_ha = self.mf.kernel(dm0=dm0)
-        if not self.mf.converged:
-            raise RuntimeError("SCF did not converge")
-
-        grad_ha_bohr = self.mf.nuc_grad_method().kernel()
-        self.results["energy"] = energy_ha * HARTREE2EV
+        grad_ha_bohr = mf.nuc_grad_method().kernel()
+        self.results["energy"] = float(mf.e_tot) * HARTREE2EV
         self.results["forces"] = -grad_ha_bohr * HARTREE2EV / BOHR2ANG
 
 
@@ -191,16 +222,25 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
                          smd_solvent=calc_config.get("smd_solvent"),
                          dispersion=calc_config.get("dispersion"))
 
-    def hessian_function(atoms_):
-        mol = build_mol(ase_to_pyscf_atom_string(atoms_), basis, charge, spin)
-        mf = mf_builder(mol)
-        mf.kernel()
-        return hessian_in_ase_units(mf)
-
     atoms = _molecule_to_atoms(molecule)
     reuse_dm = calc_config.get("reuse_dm", True)
-    atoms.calc = GPU4PySCFCalculator(mf_builder, charge=charge, spin=spin, basis=basis,
-                                     reuse_dm=reuse_dm)
+    calc = GPU4PySCFCalculator(mf_builder, charge=charge, spin=spin, basis=basis,
+                               reuse_dm=reuse_dm)
+    atoms.calc = calc
+
+    def converged_mf_at(atoms_):
+        """Converged mf at `atoms_` geometry: the calculator's own if it was
+        just evaluated there (Sella always evaluates energy/forces before it
+        asks for a Hessian), otherwise a fresh SCF seeded from the previous
+        density."""
+        mf = calc.converged_mf(atoms_)
+        if mf is None:
+            mol = build_mol(ase_to_pyscf_atom_string(atoms_), basis, charge, spin)
+            mf = calc.run_scf(mol)
+        return mf
+
+    def hessian_function(atoms_):
+        return hessian_in_ase_units(converged_mf_at(atoms_))
 
     if trajectory_path is not None:
         os.makedirs(os.path.dirname(trajectory_path) or ".", exist_ok=True)
@@ -213,9 +253,8 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
     converged = opt.converged()
 
     optimized_molecule = _atoms_to_molecule(atoms, charge, spin_multiplicity)
-    final_mol = build_mol(ase_to_pyscf_atom_string(atoms), basis, charge, spin)
-    mf = mf_builder(final_mol)
-    energy_ha = mf.kernel()
+    mf = converged_mf_at(atoms)
+    energy_ha = float(mf.e_tot)
 
     spin_contamination = check_spin_contamination(mf, spin)
 
