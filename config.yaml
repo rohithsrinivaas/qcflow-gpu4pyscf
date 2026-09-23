@@ -5,12 +5,40 @@ workflow_tags:
 gpu:
   n_gpus: 2
 
+# Every key below `smd_solvent` is optional and shown at its default, which is
+# this workflow's original behaviour. Each has a Q-Chem counterpart (see README,
+# "Q-Chem-style speed-ups"); `benchmark_scf_guess.py` measures the alternatives
+# before you change one here.
 input_params_step1:
   xc: wb97mv
   basis: def2-svpd
   smd_solvent: "EC:EMC"
+  # Adopted 2026-09-22 from the Stage 1 / Stage 3 study (outputs/stage1, outputs/stage3*):
+  # 2.0x faster optimizations, forces within 5e-4 eV/A of the (99,590) grid, same
+  # minima on all three test molecules. See README, "Q-Chem-style speed-ups".
+  grid: {level: 4, prune: nwchem, atom_grid: {H: [40, 194]}}
+  final_grid: {atom_grid: [99, 590], prune: nwchem}
+  nlc_grid: {level: 1}
+  scf_conv_tol: 1.0e-9
+  scf_guess: atomic          # `mo` is ~3% faster and guarded, but gains nothing on most molecules
+  reuse_mf: true
+  # --- SCF ---------------------------------------------------------------
+  # scf_conv_tol_grad: null   # orbital-gradient convergence; null -> sqrt(scf_conv_tol)
+  # guess_energy_guard: 0.02  # Ha; a seeded SCF this far above the previous step is redone cold (0 disables)
+  # --- XC quadrature -----------------------------------------------------
+  # --- optimizer -----------------------------------------------------------
+  # optimizer: sella          # sella | sella-quasi (no analytic Hessian) | geometric (libopt3-like)
+  # hessian_every: 20         # sella only: analytic Hessian every N steps
+  # hessian_grid: null        # sella only: evaluate that Hessian on a finer grid than `grid`
+  # geomopt: {}               # geometric only: extra geomeTRIC options, e.g. {qccnv: true}
 
 input_params_step4:
   xc: wb97mv
   basis: def2-svpd
   smd_solvent: "EC:EMC"
+  grid: {level: 4, prune: nwchem, atom_grid: {H: [40, 194]}}
+  final_grid: {atom_grid: [99, 590], prune: nwchem}
+  nlc_grid: {level: 1}
+  scf_conv_tol: 1.0e-9
+  scf_guess: atomic
+  reuse_mf: true
