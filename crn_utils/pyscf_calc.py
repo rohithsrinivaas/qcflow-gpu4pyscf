@@ -29,6 +29,7 @@ Q-Chem-like alternatives and `benchmark_scf_guess.py` measures them:
 import logging
 import os
 import tempfile
+import time
 
 import numpy as np
 import pyscf
@@ -129,8 +130,17 @@ def configure_grids(grids, spec):
     return grids
 
 
+# CDIIS cycles before an SCF is handed over to a fallback (`run_scf`'s SOSCF
+# continuation, or `GPU4PySCFCalculator.run_scf`'s escalating chain). Easy
+# SCFs converge in 15-50 cycles; ones that don't by then mostly oscillate
+# rather than converge slowly, so switching early saves the ~150 wasted
+# cycles of a 200 cap.
+CDIIS_MAX_CYCLE = 50
+SOSCF_MAX_CYCLE = 50
+
+
 def build_mf(mol, xc, smd_solvent=None, dispersion=None, grid=None, nlc_grid=None,
-             scf_conv_tol=1e-10, scf_conv_tol_grad=None, max_scf_cycles=200):
+             scf_conv_tol=1e-10, scf_conv_tol_grad=None, max_scf_cycles=CDIIS_MAX_CYCLE):
     """Build a GPU4PySCF mean-field object for an already-built pyscf.Mole.
 
     `dispersion` defaults to None: wB97M-V carries VV10 non-local correlation,
@@ -169,6 +179,31 @@ def mf_kwargs_from_config(calc_config, final=False):
         "scf_conv_tol": calc_config.get("scf_conv_tol", 1e-10),
         "scf_conv_tol_grad": calc_config.get("scf_conv_tol_grad"),
     }
+
+
+def run_scf(mf, stats=None):
+    """Run the SCF with the default CDIIS solver; if that doesn't converge,
+    continue from its last orbitals with the second-order (CIAH Newton) SOSCF
+    solver, which handles the small-gap charged open-shell cases where DIIS
+    oscillates. Returns a converged plain mean-field object (SOSCF mixin
+    removed, so gradients/Hessians work as usual) or raises RuntimeError.
+    `stats`, if given, counts SCFs and SOSCF fallbacks: {"n_scf", "n_soscf"}.
+    """
+    if stats is not None:
+        stats["n_scf"] = stats.get("n_scf", 0) + 1
+    mf.kernel()
+    if mf.converged:
+        return mf
+
+    logger.warning("CDIIS did not converge in %s cycles; retrying with SOSCF", mf.cycles)
+    if stats is not None:
+        stats["n_soscf"] = stats.get("n_soscf", 0) + 1
+    mf_soscf = mf.newton()
+    mf_soscf.max_cycle = SOSCF_MAX_CYCLE
+    mf_soscf.kernel(mf.mo_coeff, mf.mo_occ)
+    if not mf_soscf.converged:
+        raise RuntimeError("SCF did not converge (CDIIS, then SOSCF)")
+    return mf_soscf.undo_soscf()
 
 
 def build_mol(atom_string, basis, charge, spin, max_memory=32000):
@@ -213,6 +248,7 @@ class GPU4PySCFCalculator(Calculator):
         self.n_scf_restarts = 0   # SCFs that only converged after falling back
         self.scf_restart_log = []  # which fallback rescued each of them
         self.n_guess_rejections = 0   # seeded SCFs redone cold because they landed too high
+        self.n_scf = 0   # SCFs requested (run_scf + cold_scf calls), fallbacks not counted separately
 
 
     def initial_guess(self, mol):
@@ -270,6 +306,7 @@ class GPU4PySCFCalculator(Calculator):
         step (seen on radical anions), so a failed SCF is retried the way
         Q-Chem's custodian handlers do it: first from the atomic-density
         guess, then with a level shift on top. Only then is it an error."""
+        self.n_scf += 1
         mf = self.mf_builder(mol, **mf_overrides)
         if dm0 is None:
             dm0 = self.initial_guess(mol)
@@ -337,7 +374,7 @@ class GPU4PySCFCalculator(Calculator):
         field for the gradient and Hessian code."""
         mf = self.mf_builder(mol, **mf_overrides)
         newton = mf.newton()
-        newton.max_cycle = 50
+        newton.max_cycle = SOSCF_MAX_CYCLE
         newton.kernel()
         if not newton.converged:
             return None
@@ -360,6 +397,7 @@ class GPU4PySCFCalculator(Calculator):
         """A throwaway mean field converged from the atomic-density guess,
         leaving `self.mf` alone -- what the Hessian and the final single
         point did before `reuse_mf`; kept for the `legacy` benchmark variant."""
+        self.n_scf += 1
         mf = self.mf_builder(mol)
         mf.kernel()
         if not mf.converged:
@@ -571,6 +609,7 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
     if trajectory_path is not None:
         os.makedirs(os.path.dirname(trajectory_path) or ".", exist_ok=True)
 
+    opt_start = time.time()
     if optimizer == "geometric":
         converged, n_steps = _optimize_geometric(atoms, fmax, max_steps, trajectory_path,
                                                  calc_config.get("geomopt"))
@@ -584,11 +623,14 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
                     diag_every_n=hessian_every if exact_hessian else None,
                     nsteps_per_diag=10, eta=1e-6, internal=True,
                     hessian_function=hessian_function if exact_hessian else None,
-                    trajectory=trajectory_path)
+                    trajectory=trajectory_path,
+                    logfile=None)  # per-step logging is too verbose at full-run scale;
+                                    # callers get a step count/wall time in the result instead
         for _ in opt.irun(fmax=fmax, steps=max_steps):
             pass
         converged = opt.converged()
         n_steps = opt.nsteps
+    opt_wall_time_s = time.time() - opt_start
 
     optimized_molecule = _atoms_to_molecule(atoms, charge, spin_multiplicity)
     mf = converged_mf_at(atoms)
@@ -626,7 +668,10 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
         "energy_Ha": energy_ha,
         "converged": bool(converged),
         "n_opt_steps": int(n_steps),
+        "opt_wall_time_s": opt_wall_time_s,
+        "n_scf": calc.n_scf,
         "n_scf_restarts": calc.n_scf_restarts,
+        "n_soscf_fallbacks": calc.scf_restart_log.count("second-order SCF (Newton)"),
         "scf_restart_log": list(calc.scf_restart_log),
         "final_state_check": final_state_check,
         "n_guess_rejections": calc.n_guess_rejections,
@@ -683,9 +728,8 @@ def single_point(molecule, charge, spin_multiplicity, calc_config):
     mol = build_mol(ase_to_pyscf_atom_string(_molecule_to_atoms(molecule)),
                      basis, charge, spin)
     mf = build_mf(mol, **mf_kwargs_from_config(calc_config, final=True))
-    energy_ha = mf.kernel()
-    if not mf.converged:
-        raise RuntimeError("SCF did not converge")
+    mf = run_scf(mf)
+    energy_ha = float(mf.e_tot)
 
     spin_contamination = check_spin_contamination(mf, spin)
     sigma_r = pyscf_thermo.rotational_symmetry_number(mol)
