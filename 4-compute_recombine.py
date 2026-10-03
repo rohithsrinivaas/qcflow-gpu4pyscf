@@ -19,20 +19,6 @@ OUTPUT_DIR = os.path.join("outputs", "frag_recombine_optimized")
 TRAJ_DIR = os.path.join("outputs", "trajectories")
 INITIAL_GRAPHS_DIR = os.path.join("outputs", "initial_graphs")
 
-# Other molecules' outputs/initial_graphs directories to skip candidates
-# against: if a structure here is isomorphic (same formula/charge/spin and
-# graph) to one already covered by another molecule's run, there's no need
-# to re-optimize it here too.
-EXTERNAL_DEDUP_DIRS = [
-    os.path.join("EC_outputs", "initial_graphs"),
-]
-EXTERNAL_DEDUP_CACHE = os.path.join("outputs", "external_dedup_cache.json")
-
-# Structures isomorphic to another structure within THIS SAME candidate pool
-# (FragmentReconnect's own within-run dedup occasionally misses these at this
-# scale -- see dedup_pc_internal.py). Optional: only applied if the cache
-# file exists.
-INTERNAL_DEDUP_CACHE = os.path.join("outputs", "internal_dedup_cache.json")
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -65,24 +51,6 @@ def build_work_items(calc_config, group_name):
     all_graphs = get_all_graphs_from_collection(already_computed)
     logger.info(f"{len(all_graphs)} structures already computed")
     already_computed_index = build_dedup_index(all_graphs)
-
-    external_dirs = [d for d in EXTERNAL_DEDUP_DIRS if os.path.isdir(d)]
-    external_duplicate_ids = get_external_duplicate_ids(
-        INITIAL_GRAPHS_DIR, external_dirs, EXTERNAL_DEDUP_CACHE
-    )
-    logger.info(
-        f"{len(external_duplicate_ids)} candidates match an external structure "
-        f"(from {external_dirs}, cached at {EXTERNAL_DEDUP_CACHE})"
-    )
-
-    internal_duplicate_ids = set()
-    if os.path.exists(INTERNAL_DEDUP_CACHE):
-        with open(INTERNAL_DEDUP_CACHE) as f:
-            internal_duplicate_ids = set(json.load(f)["internal_duplicate_ids"])
-    logger.info(
-        f"{len(internal_duplicate_ids)} candidates skipped as internal duplicates "
-        f"(cached at {INTERNAL_DEDUP_CACHE})"
-    )
 
     recombination_candidates = initial_graphs_collection.find(
         {"tags.group": FragmentReconnect.groupname}
@@ -119,8 +87,6 @@ def build_work_items(calc_config, group_name):
         work_items.append((doc_id, molecule, molecule.charge, tags, calc_config))
 
     logger.info(f"{count_structures} structures processed for calculation.")
-    logger.info(f"{count_skipped_external} structures skipped as external duplicates.")
-    logger.info(f"{count_skipped_internal} structures skipped as internal duplicates.")
     logger.info(f"{len(work_items)} structures accepted for calculation.")
     return work_items
 
