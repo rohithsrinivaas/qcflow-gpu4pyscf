@@ -178,7 +178,15 @@ def mf_kwargs_from_config(calc_config, final=False):
         "nlc_grid": calc_config.get("nlc_grid"),
         "scf_conv_tol": calc_config.get("scf_conv_tol", 1e-10),
         "scf_conv_tol_grad": calc_config.get("scf_conv_tol_grad"),
+        **({"max_scf_cycles": int(calc_config["max_scf_cycles"])} if calc_config.get("max_scf_cycles") else {}),
     }
+
+
+# How a non-converged CDIIS is handled inside the optimizer:
+#   "chain"       -- cold restarts: atomic guess, Huckel, Newton from scratch, wide DIIS (the 2026-09 behaviour;
+#                    pair it with max_scf_cycles: 200 to reproduce the 2026-09 runs exactly)
+#   "soscf_first" -- DEFAULT: continue from the CDIIS orbitals with SOSCF (`run_scf`, upstream 2026-10-02), then the chain
+SCF_PROTOCOLS = ("chain", "soscf_first")
 
 
 def run_scf(mf, stats=None):
@@ -232,8 +240,11 @@ class GPU4PySCFCalculator(Calculator):
     implemented_properties = ["energy", "forces"]
 
     def __init__(self, mf_builder, charge, spin, basis, scf_guess="density",
-                 reuse_dm=None, guess_energy_guard=0.02, **kwargs):
+                 reuse_dm=None, guess_energy_guard=0.02, scf_protocol="soscf_first", **kwargs):
         super().__init__(**kwargs)
+        if scf_protocol not in SCF_PROTOCOLS:
+            raise ValueError(f"scf_protocol must be one of {SCF_PROTOCOLS}, got {scf_protocol!r}")
+        self.scf_protocol = scf_protocol
         if reuse_dm is not None:   # the pre-`scf_guess` spelling of the same choice
             scf_guess = "density" if reuse_dm else "atomic"
         if scf_guess not in SCF_GUESSES:
@@ -313,6 +324,17 @@ class GPU4PySCFCalculator(Calculator):
         previous = self.mf
         self.mf = mf
         mf.kernel(dm0=dm0)
+        if not mf.converged and self.scf_protocol == "soscf_first":
+            # Continue from the CDIIS orbitals with the second-order solver instead of
+            # throwing them away (upstream `run_scf`); the cold chain below stays as backup.
+            logger.warning("CDIIS did not converge in %s cycles; continuing with SOSCF", mf.cycles)
+            soscf = mf.newton()
+            soscf.max_cycle = SOSCF_MAX_CYCLE
+            soscf.kernel(mf.mo_coeff, mf.mo_occ)
+            if soscf.converged:
+                self.mf = mf = soscf.undo_soscf()
+                self.n_scf_restarts += 1
+                self.scf_restart_log.append("SOSCF continuation")
         if mf.converged and dm0 is not None and self._seeded_solution_suspect(mf, previous):
             # A projected guess can converge to a different SCF solution
             # (seen: +49 kcal/mol on a radical anion, with <S^2> unchanged, so
@@ -574,7 +596,8 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
     atoms = _molecule_to_atoms(molecule)
     calc = GPU4PySCFCalculator(mf_builder, charge=charge, spin=spin, basis=basis,
                                scf_guess=scf_guess,
-                               guess_energy_guard=calc_config.get("guess_energy_guard", 0.02))
+                               guess_energy_guard=calc_config.get("guess_energy_guard", 0.02),
+                               scf_protocol=calc_config.get("scf_protocol", "soscf_first"))
     atoms.calc = calc
 
     def mol_at(atoms_):
@@ -671,7 +694,7 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
         "opt_wall_time_s": opt_wall_time_s,
         "n_scf": calc.n_scf,
         "n_scf_restarts": calc.n_scf_restarts,
-        "n_soscf_fallbacks": calc.scf_restart_log.count("second-order SCF (Newton)"),
+        "n_soscf_fallbacks": sum(calc.scf_restart_log.count(k) for k in ("SOSCF continuation", "second-order SCF (Newton)")),
         "scf_restart_log": list(calc.scf_restart_log),
         "final_state_check": final_state_check,
         "n_guess_rejections": calc.n_guess_rejections,
@@ -690,6 +713,8 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
             "nlc_grid": mf_kwargs["nlc_grid"],
             "scf_conv_tol": mf_kwargs["scf_conv_tol"],
             "scf_conv_tol_grad": mf_kwargs["scf_conv_tol_grad"],
+            "scf_protocol": calc.scf_protocol,
+            "max_scf_cycles": mf_kwargs.get("max_scf_cycles", CDIIS_MAX_CYCLE),
         },
         "point_group": None,
         "rotational_symmetry_number": None,
