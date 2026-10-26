@@ -6,17 +6,14 @@ gpu:
   n_gpus: 2
   deterministic: false   # true: bit-reproducible GPU runs (GPU4PYSCF_DETERMINISTIC=1; needs the group's gpu4pyscf fork)
 
-# Every key below `smd_solvent` is optional and shown at its default, which is
-# this workflow's original behaviour. Each has a Q-Chem counterpart (see README,
-# "Q-Chem-style speed-ups"); `benchmark_scf_guess.py` measures the alternatives
-# before you change one here.
+# Every key below `smd_solvent` is optional and shown at its default. Each has a
+# Q-Chem counterpart; see the table in the crn_utils/pyscf_calc.py docstring.
 input_params_step1:
   xc: wb97mv
   basis: def2-svpd
   smd_solvent: "EC:EMC"
-  # Adopted 2026-09-22 from the Stage 1 / Stage 3 study (outputs/stage1, outputs/stage3*):
-  # 2.0x faster optimizations, forces within 5e-4 eV/A of the (99,590) grid, same
-  # minima on all three test molecules. See README, "Q-Chem-style speed-ups".
+  # Adopted 2026-09-22: 2.0x faster optimizations, forces within 5e-4 eV/A of the
+  # (99,590) grid, same minima on the test molecules.
   grid: {level: 4, prune: nwchem, atom_grid: {H: [40, 194]}}
   final_grid: {atom_grid: [99, 590], prune: nwchem}
   nlc_grid: {level: 1}

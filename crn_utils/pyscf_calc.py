@@ -6,9 +6,8 @@ Adapted from an earlier in-group PySCF/ASE reference implementation, fixing two
 unit bugs there: PySCF energies/gradients/Hessians are in Hartree / Hartree-per-Bohr
 [^2], while ASE (and therefore Sella) expects eV / eV-per-Angstrom[^2].
 
-Every speed-related knob below has a Q-Chem counterpart, and the defaults
-reproduce this workflow's original behaviour; `config.yaml` documents the
-Q-Chem-like alternatives and `benchmark_scf_guess.py` measures them:
+Every speed-related knob below has a Q-Chem counterpart; `config.yaml` carries
+the validated production values:
 
     calc_config key      Q-Chem analogue                     default here
     scf_guess            SCF_GUESS=READ between opt cycles   "density" (Q-Chem: MOs -> "mo")
