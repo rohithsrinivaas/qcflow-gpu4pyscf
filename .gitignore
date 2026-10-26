@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+local-testing/
+*.traj
+*.log
+*.egg-info/

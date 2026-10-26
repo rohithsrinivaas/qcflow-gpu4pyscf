@@ -3,7 +3,7 @@ import yaml
 
 from pymatgen.core.structure import Molecule
 
-from crn_utils.gpu_pool import map_over_gpus
+from crn_utils.gpu_pool import map_over_gpus, worker_env
 from crn_utils.file_store import write_result, result_exists
 
 OUTPUT_DIR = os.path.join("outputs", "init_optimized")
@@ -52,7 +52,7 @@ if __name__ == "__main__":
             work_items.append(item)
 
     print(f"Running {len(work_items)} molecules across {n_gpus} GPUs")
-    for result in map_over_gpus(run_one, work_items, n_gpus=n_gpus):
+    for result in map_over_gpus(run_one, work_items, n_gpus=n_gpus, env=worker_env(config)):
         if isinstance(result, dict) and "error" in result:
             print("FAILED:", result["error"], result["item"])
         else:

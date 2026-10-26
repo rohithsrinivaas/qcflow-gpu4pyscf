@@ -13,7 +13,7 @@ from crn_utils.utils import (
     is_duplicate,
     get_external_duplicate_ids,
 )
-from crn_utils.gpu_pool import map_over_gpus
+from crn_utils.gpu_pool import map_over_gpus, worker_env
 
 OUTPUT_DIR = os.path.join("outputs", "frag_recombine_optimized")
 TRAJ_DIR = os.path.join("outputs", "trajectories")
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     shard = work_items[args.offset:end]
     logger.info(f"Processing shard [{args.offset}:{end}] -> {len(shard)} of {len(work_items)} work items")
 
-    for result in map_over_gpus(run_one, shard, n_gpus=n_gpus):
+    for result in map_over_gpus(run_one, shard, n_gpus=n_gpus, env=worker_env(config)):
         if isinstance(result, dict) and "error" in result:
             print("FAILED:", result["error"], result["item"])
         else:

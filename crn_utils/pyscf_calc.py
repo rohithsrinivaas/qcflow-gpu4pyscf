@@ -1,9 +1,8 @@
-"""GPU4PySCF compute layer: mean-field construction and geometry optimization.
-No Hessian/frequency/thermo analysis anywhere in this module.
+"""GPU4PySCF compute layer: mean-field construction, geometry optimization and
+the analytic Hessian Sella uses. No frequency/thermo analysis.
 
 Replaces atomate.qchem.fireworks.core.{FrequencyFlatteningOptimizeFW,SinglePointFW}.
-Adapted from the reference implementation at /data/shared/rohith_data/rishabh
-(pyscf2ase.py, run_opt_vacuum.py, resp_charges/*/run_resp_vacuum.py), fixing two
+Adapted from an earlier in-group PySCF/ASE reference implementation, fixing two
 unit bugs there: PySCF energies/gradients/Hessians are in Hartree / Hartree-per-Bohr
 [^2], while ASE (and therefore Sella) expects eV / eV-per-Angstrom[^2].
 
@@ -45,6 +44,24 @@ from pyscf.scf import addons as scf_addons
 from sella import Sella
 
 logger = logging.getLogger(__name__)
+
+
+def software_versions():
+    """gpu4pyscf/pyscf versions and whether gpu4pyscf's deterministic mode is on
+    (GPU4PYSCF_DETERMINISTIC=1, available in the group's gpu4pyscf fork); stored
+    in every result for provenance."""
+    import gpu4pyscf
+    try:
+        from gpu4pyscf.lib import fixed_point
+        deterministic = bool(fixed_point.deterministic())
+    except ImportError:   # stock gpu4pyscf
+        deterministic = False
+    return {"gpu4pyscf": gpu4pyscf.__version__, "pyscf": pyscf.__version__,
+            "deterministic": deterministic}
+
+
+logger.info("gpu4pyscf %(gpu4pyscf)s, pyscf %(pyscf)s, deterministic=%(deterministic)s",
+            software_versions())
 
 HARTREE2EV = ase_units.Hartree
 BOHR2ANG = ase_units.Bohr
@@ -709,6 +726,7 @@ def optimize_and_analyze(molecule, charge, spin_multiplicity, calc_config,
         "xc": calc_config["xc"],
         "smd_solvent": calc_config.get("smd_solvent"),
         "spin_contamination": spin_contamination,
+        "software": software_versions(),
         "settings": {
             "scf_guess": scf_guess,
             "reuse_mf": bool(reuse_mf),
@@ -777,6 +795,7 @@ def single_point(molecule, charge, spin_multiplicity, calc_config):
         "xc": calc_config["xc"],
         "smd_solvent": calc_config.get("smd_solvent"),
         "spin_contamination": spin_contamination,
+        "software": software_versions(),
         "point_group": "Kh",
         "rotational_symmetry_number": sigma_r,
     }

@@ -4,6 +4,7 @@ workflow_tags:
 
 gpu:
   n_gpus: 2
+  deterministic: false   # true: bit-reproducible GPU runs (GPU4PYSCF_DETERMINISTIC=1; needs the group's gpu4pyscf fork)
 
 # Every key below `smd_solvent` is optional and shown at its default, which is
 # this workflow's original behaviour. Each has a Q-Chem counterpart (see README,
@@ -22,6 +23,8 @@ input_params_step1:
   scf_conv_tol: 1.0e-9
   scf_guess: atomic          # `mo` is ~3% faster and guarded, but gains nothing on most molecules
   reuse_mf: true
+  max_scf_cycles: 50         # CDIIS cycles before the fallback below takes over
+  scf_protocol: soscf_first  # soscf_first: continue a stuck CDIIS with SOSCF, then cold restarts | chain: cold restarts only (pre-2026-10 behaviour, use with max_scf_cycles: 200)
   # --- SCF ---------------------------------------------------------------
   # scf_conv_tol_grad: null   # orbital-gradient convergence; null -> sqrt(scf_conv_tol)
   # guess_energy_guard: 0.02  # Ha; a seeded SCF this far above the previous step is redone cold (0 disables)
@@ -42,3 +45,5 @@ input_params_step4:
   scf_conv_tol: 1.0e-9
   scf_guess: atomic
   reuse_mf: true
+  max_scf_cycles: 50
+  scf_protocol: soscf_first
