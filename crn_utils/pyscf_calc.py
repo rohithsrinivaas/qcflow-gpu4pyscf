@@ -83,7 +83,7 @@ except (ImportError, AttributeError):
 # The grid this workflow has always used: the (99,590) parent of Q-Chem's SG-3,
 # with gpu4pyscf's NWChem-style pruning. Q-Chem's SG-3 keeps 30% of that
 # parent's points; gpu4pyscf's `{"level": 3}` lands in the same neighbourhood
-# (see README), which is what the `grid-l3` benchmark variant measures.
+# of point count.
 PRODUCTION_GRID = {"atom_grid": (99, 590), "prune": "nwchem"}
 
 _PRUNE_SCHEMES = {
