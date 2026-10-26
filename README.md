@@ -14,6 +14,7 @@ multiprocessing loops across the local GPUs -- no job queue, no database.
   A custom SMD solvent can be registered in `crn_utils/pyscf_calc.py`
   (`gpu4pyscf.solvent.smd.solvent_db`) if it isn't one of GPU4PySCF's built-in
   entries.
+* Install GPU4PySCF from https://github.com/oliverhvidsten/gpu4pyscf/tree/master
 
 
 # The general approach using the qcflow
