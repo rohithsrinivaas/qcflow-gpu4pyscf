@@ -10,27 +10,27 @@ production grids and SOSCF fallback described in `crn_utils/pyscf_calc.py`.
 ## Setup
 
 1. **Python environment** (Perlmutter, A100, CUDA 12):
-   `conda env create -f environment.yaml && conda activate qcflow`
+   ```
+   conda env create -f environment.yaml && conda activate qcflow
+   mkdir -p $CONDA_PREFIX/etc/conda/activate.d && cp env/cutensor-activate.sh $CONDA_PREFIX/etc/conda/activate.d/
+   conda activate qcflow   # again, so the hook runs
+   ```
+   The hook puts cuTENSOR on `LD_LIBRARY_PATH`; without it GPU4PySCF silently falls back
+   to slower contractions.
 2. **GPU4PySCF, the group's fork** (`github.com/oliverhvidsten/gpu4pyscf`, tag `v1.8.1-det.1`).
    It is upstream GPU4PySCF 1.8 plus a deterministic mode and two loader fixes; the version
    reports as `1.8.1+det`. Either install the prebuilt A100 wheel
    ```
    pip install --no-deps /global/cfs/cdirs/matgen/shared/gpu4pyscf-det/gpu4pyscf_cuda12x-1.8.1+det-*.whl
    ```
-   or build from source (about 30 min, needs `module load cudatoolkit/12.9`; see the fork's
-   `DETERMINISM.md` for the CMake options):
-   ```
-   git clone --branch v1.8.1-det.1 git@github.com:oliverhvidsten/gpu4pyscf.git
-   cd gpu4pyscf && GPU4PYSCF_BUILD_CUDA_WHEEL=1 CMAKE_CONFIGURE_ARGS="-DCUDA_ARCHITECTURES=80-real" \
-       pip install --no-deps --no-build-isolation .
-   ```
+   or build it from source (about 30 min): clone the tag and follow the build snippet in
+   the fork's `DETERMINISM.md`.
    The stock `gpu4pyscf-cuda12x` wheel from PyPI also works with this code, without the
    deterministic mode.
 3. **Smoke test**: from the repository root,
    `python examples/smoke_test.py --repeat 2`
-   prints the versions, whether cuTENSOR is active (it should be; if not, add the
-   `cutensor` package's `lib` directory to `LD_LIBRARY_PATH`), and a water SMD energy
-   twice. With `GPU4PYSCF_DETERMINISTIC=1` the two energies must be bit-identical.
+   prints the versions, whether cuTENSOR is active (it should be; if not, the activation
+   hook from step 1 is missing), and a water SMD energy twice. With `GPU4PYSCF_DETERMINISTIC=1` the two energies must be bit-identical.
 4. **Configure** `config.yaml`: project name, GPU count, DFT/solvent settings. Every
    SCF/grid/optimizer key is documented there and in the `pyscf_calc.py` docstring. The
    custom SMD solvent `EC:EMC` is registered in `crn_utils/pyscf_calc.py`; add others the
