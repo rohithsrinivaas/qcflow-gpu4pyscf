@@ -56,6 +56,13 @@ BOHR2ANG = ase_units.Bohr
 gpu4pyscf_smd.solvent_db.setdefault(
     "EC:EMC", [1.415, 1.415, 0.00, 0.735, 20.2, 18.5, 0.00, 0.00]
 )
+try:
+    # gpu4pyscf > 1.8.1 resolves solvent names through a lookup table built once at
+    # import, so a name added to solvent_db afterwards must be registered there too.
+    from gpu4pyscf.solvent import _solvent_data as _gpu4pyscf_solvent_data
+    _gpu4pyscf_solvent_data._solvent_keys[_gpu4pyscf_solvent_data._normalize("EC:EMC")] = "EC:EMC"
+except (ImportError, AttributeError):
+    pass
 
 # The grid this workflow has always used: the (99,590) parent of Q-Chem's SG-3,
 # with gpu4pyscf's NWChem-style pruning. Q-Chem's SG-3 keeps 30% of that
